@@ -183,7 +183,7 @@ var (
 
 // maskRand is an io.Reader for generating mask bytes. The reader is initialized
 // to crypto/rand Reader. Tests swap the reader to a math/rand reader for
-// reproducible results. 
+// reproducible results.
 var maskRand = rand.Reader
 
 // newMaskKey returns a new 32 bit value for masking client frames.
@@ -191,13 +191,6 @@ func newMaskKey() [4]byte {
 	var k [4]byte
 	_, _ = io.ReadFull(maskRand, k[:])
 	return k
-}
-
-func hideTempErr(err error) error {
-	if e, ok := err.(net.Error); ok && e.Temporary() {
-		err = &netError{msg: e.Error(), timeout: e.Timeout()}
-	}
-	return err
 }
 
 func isControl(frameType int) bool {
@@ -365,7 +358,6 @@ func (c *Conn) RemoteAddr() net.Addr {
 // Write methods
 
 func (c *Conn) writeFatal(err error) error {
-	err = hideTempErr(err)
 	c.writeErrMu.Lock()
 	if c.writeErr == nil {
 		c.writeErr = err
@@ -1015,7 +1007,7 @@ func (c *Conn) NextReader() (messageType int, r io.Reader, err error) {
 	for c.readErr == nil {
 		frameType, err := c.advanceFrame()
 		if err != nil {
-			c.readErr = hideTempErr(err)
+			c.readErr = err
 			break
 		}
 
@@ -1055,7 +1047,7 @@ func (r *messageReader) Read(b []byte) (int, error) {
 				b = b[:c.readRemaining]
 			}
 			n, err := c.br.Read(b)
-			c.readErr = hideTempErr(err)
+			c.readErr = err
 			if c.isServer {
 				c.readMaskPos = maskBytes(c.readMaskKey, c.readMaskPos, b[:n])
 			}
@@ -1076,7 +1068,7 @@ func (r *messageReader) Read(b []byte) (int, error) {
 		frameType, err := c.advanceFrame()
 		switch {
 		case err != nil:
-			c.readErr = hideTempErr(err)
+			c.readErr = err
 		case frameType == TextMessage || frameType == BinaryMessage:
 			c.readErr = errors.New("websocket: internal error, unexpected text or binary in Reader")
 		}
@@ -1165,13 +1157,9 @@ func (c *Conn) PingHandler() func(appData string) error {
 func (c *Conn) SetPingHandler(h func(appData string) error) {
 	if h == nil {
 		h = func(message string) error {
-			err := c.WriteControl(PongMessage, []byte(message), time.Now().Add(writeWait))
-			if err == ErrCloseSent {
-				return nil
-			} else if e, ok := err.(net.Error); ok && e.Temporary() {
-				return nil
-			}
-			return err
+			// Make a best effort to send the pong mesage.
+			_ = c.WriteControl(PongMessage, []byte(message), time.Now().Add(writeWait))
+			return nil
 		}
 	}
 	c.handlePing = h
