@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httptrace"
@@ -290,7 +289,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 			}
 			err = c.SetDeadline(deadline)
 			if err != nil {
-				c.Close()
+				_ = c.Close()
 				return nil, err
 			}
 			return c, nil
@@ -330,7 +329,10 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 
 	defer func() {
 		if netConn != nil {
-			netConn.Close()
+			// It's safe to ignore the error from Close() because this code is
+			// only executed when returning a more important to the
+			// application.
+			_ = netConn.Close()
 		}
 	}()
 
@@ -400,7 +402,7 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		// debugging.
 		buf := make([]byte, 1024)
 		n, _ := io.ReadFull(resp.Body, buf)
-		resp.Body = ioutil.NopCloser(bytes.NewReader(buf[:n]))
+		resp.Body = io.NopCloser(bytes.NewReader(buf[:n]))
 		return nil, resp, ErrBadHandshake
 	}
 
@@ -418,17 +420,23 @@ func (d *Dialer) DialContext(ctx context.Context, urlStr string, requestHeader h
 		break
 	}
 
-	resp.Body = ioutil.NopCloser(bytes.NewReader([]byte{}))
+	resp.Body = io.NopCloser(bytes.NewReader([]byte{}))
 	conn.subprotocol = resp.Header.Get("Sec-Websocket-Protocol")
 
-	netConn.SetDeadline(time.Time{})
-	netConn = nil // to avoid close in defer.
+	if err := netConn.SetDeadline(time.Time{}); err != nil {
+		return nil, resp, err
+	}
+
+	// Set netConn to nil to avoid call to netConn.Close() in
+	// deferred function call.
+	netConn = nil
+
 	return conn, resp, nil
 }
 
 func cloneTLSConfig(cfg *tls.Config) *tls.Config {
 	if cfg == nil {
-		return &tls.Config{}
+		return &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 	return cfg.Clone()
 }

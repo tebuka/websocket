@@ -1,4 +1,4 @@
-// Copyright 2013 The Gorilla WebSocket Authors. All rights reserved.
+// Copyreght 2013 The Gorilla WebSocket Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
@@ -10,7 +10,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
-	"io/ioutil"
 	"net"
 	"strconv"
 	"strings"
@@ -371,7 +370,9 @@ func (c *Conn) read(n int) ([]byte, error) {
 	if err == io.EOF {
 		err = errUnexpectedEOF
 	}
-	c.br.Discard(len(p))
+	// Discard is guaranteed to succeed when number of bytes to skip is less
+	// than or equal to the number of bytes buffered.
+	_, _ = c.br.Discard(len(p))
 	return p, err
 }
 
@@ -386,7 +387,9 @@ func (c *Conn) write(frameType int, deadline time.Time, buf0, buf1 []byte) error
 		return err
 	}
 
-	c.conn.SetWriteDeadline(deadline)
+	if err := c.conn.SetWriteDeadline(deadline); err != nil {
+		return c.writeFatal(err)
+	}
 	if len(buf1) == 0 {
 		_, err = c.conn.Write(buf0)
 	} else {
@@ -396,7 +399,7 @@ func (c *Conn) write(frameType int, deadline time.Time, buf0, buf1 []byte) error
 		return c.writeFatal(err)
 	}
 	if frameType == CloseMessage {
-		c.writeFatal(ErrCloseSent)
+		_ = c.writeFatal(ErrCloseSent)
 	}
 	return nil
 }
@@ -437,7 +440,7 @@ func (c *Conn) WriteControl(messageType int, data []byte, deadline time.Time) er
 
 	d := 1000 * time.Hour
 	if !deadline.IsZero() {
-		d = deadline.Sub(time.Now())
+		d = time.Until(deadline)
 		if d < 0 {
 			return errWriteTimeout
 		}
@@ -459,13 +462,14 @@ func (c *Conn) WriteControl(messageType int, data []byte, deadline time.Time) er
 		return err
 	}
 
-	c.conn.SetWriteDeadline(deadline)
-	_, err = c.conn.Write(buf)
-	if err != nil {
+	if err := c.conn.SetWriteDeadline(deadline); err != nil {
+		return c.writeFatal(err)
+	}
+	if _, err = c.conn.Write(buf); err != nil {
 		return c.writeFatal(err)
 	}
 	if messageType == CloseMessage {
-		c.writeFatal(ErrCloseSent)
+		_ = c.writeFatal(ErrCloseSent)
 	}
 	return err
 }
@@ -474,9 +478,11 @@ func (c *Conn) WriteControl(messageType int, data []byte, deadline time.Time) er
 func (c *Conn) beginMessage(mw *messageWriter, messageType int) error {
 	// Close previous writer if not already closed by the application. It's
 	// probably better to return an error in this situation, but we cannot
-	// change this without breaking existing applications.
+	// change this without breaking existing applications. If the previous
+	// writer caused the connection to fail, then that error is recorded in
+	// c.writeErr and returned below.
 	if c.writer != nil {
-		c.writer.Close()
+		_ = c.writer.Close()
 		c.writer = nil
 	}
 
@@ -629,7 +635,7 @@ func (w *messageWriter) flushFrame(final bool, extra []byte) error {
 	}
 
 	if final {
-		w.endMessage(errWriteClosed)
+		_ = w.endMessage(errWriteClosed)
 		return nil
 	}
 
@@ -794,7 +800,7 @@ func (c *Conn) advanceFrame() (int, error) {
 	// 1. Skip remainder of previous frame.
 
 	if c.readRemaining > 0 {
-		if _, err := io.CopyN(ioutil.Discard, c.br, c.readRemaining); err != nil {
+		if _, err := io.CopyN(io.Discard, c.br, c.readRemaining); err != nil {
 			return noFrame, err
 		}
 	}
@@ -816,7 +822,7 @@ func (c *Conn) advanceFrame() (int, error) {
 	rsv2 := p[0]&rsv2Bit != 0
 	rsv3 := p[0]&rsv3Bit != 0
 	mask := p[1]&maskBit != 0
-	c.setReadRemaining(int64(p[1] & 0x7f))
+	_ = c.setReadRemaining(int64(p[1] & 0x7f)) // guaranteed to succeed
 
 	c.readDecompress = false
 	if rsv1 {
@@ -921,7 +927,8 @@ func (c *Conn) advanceFrame() (int, error) {
 		}
 
 		if c.readLimit > 0 && c.readLength > c.readLimit {
-			c.WriteControl(CloseMessage, FormatCloseMessage(CloseMessageTooBig, ""), time.Now().Add(writeWait))
+			// Make a best effort to send a close message.
+			_ = c.WriteControl(CloseMessage, FormatCloseMessage(CloseMessageTooBig, ""), time.Now().Add(writeWait))
 			return noFrame, ErrReadLimit
 		}
 
@@ -933,7 +940,7 @@ func (c *Conn) advanceFrame() (int, error) {
 	var payload []byte
 	if c.readRemaining > 0 {
 		payload, err = c.read(int(c.readRemaining))
-		c.setReadRemaining(0)
+		_ = c.setReadRemaining(0) // guaranteed to succeed
 		if err != nil {
 			return noFrame, err
 		}
@@ -980,7 +987,8 @@ func (c *Conn) handleProtocolError(message string) error {
 	if len(data) > maxControlFramePayloadSize {
 		data = data[:maxControlFramePayloadSize]
 	}
-	c.WriteControl(CloseMessage, data, time.Now().Add(writeWait))
+	// Make a best effort to send a close message.
+	_ = c.WriteControl(CloseMessage, data, time.Now().Add(writeWait))
 	return errors.New("websocket: " + message)
 }
 
@@ -997,7 +1005,7 @@ func (c *Conn) handleProtocolError(message string) error {
 func (c *Conn) NextReader() (messageType int, r io.Reader, err error) {
 	// Close previous reader, only relevant for decompression.
 	if c.reader != nil {
-		c.reader.Close()
+		_ = c.reader.Close()
 		c.reader = nil
 	}
 
@@ -1053,7 +1061,7 @@ func (r *messageReader) Read(b []byte) (int, error) {
 			}
 			rem := c.readRemaining
 			rem -= int64(n)
-			c.setReadRemaining(rem)
+			_ = c.setReadRemaining(rem) // guaranteed to succeed
 			if c.readRemaining > 0 && c.readErr == io.EOF {
 				c.readErr = errUnexpectedEOF
 			}
@@ -1093,7 +1101,7 @@ func (c *Conn) ReadMessage() (messageType int, p []byte, err error) {
 	if err != nil {
 		return messageType, nil, err
 	}
-	p, err = ioutil.ReadAll(r)
+	p, err = io.ReadAll(r)
 	return messageType, p, err
 }
 
@@ -1135,7 +1143,8 @@ func (c *Conn) SetCloseHandler(h func(code int, text string) error) {
 	if h == nil {
 		h = func(code int, text string) error {
 			message := FormatCloseMessage(code, "")
-			c.WriteControl(CloseMessage, message, time.Now().Add(writeWait))
+			// Make a best effort to send a close message.
+			_ = c.WriteControl(CloseMessage, message, time.Now().Add(writeWait))
 			return nil
 		}
 	}

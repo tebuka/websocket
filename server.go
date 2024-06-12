@@ -182,8 +182,16 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		return u.returnError(w, r, http.StatusInternalServerError, err.Error())
 	}
 
+	defer func() {
+		if netConn != nil {
+			// It's safe to ignore the error from Close() because this code is
+			// only executed when returning a more important to the
+			// application.
+			_ = netConn.Close()
+		}
+	}()
+
 	if brw.Reader.Buffered() > 0 {
-		netConn.Close()
 		return nil, errors.New("websocket: client sent data before handshake is complete")
 	}
 
@@ -248,18 +256,26 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	p = append(p, "\r\n"...)
 
 	// Clear deadlines set by HTTP server.
-	netConn.SetDeadline(time.Time{})
-
-	if u.HandshakeTimeout > 0 {
-		netConn.SetWriteDeadline(time.Now().Add(u.HandshakeTimeout))
-	}
-	if _, err = netConn.Write(p); err != nil {
-		netConn.Close()
+	if err := netConn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
 	if u.HandshakeTimeout > 0 {
-		netConn.SetWriteDeadline(time.Time{})
+		if err := netConn.SetWriteDeadline(time.Now().Add(u.HandshakeTimeout)); err != nil {
+			return nil, err
+		}
 	}
+	if _, err = netConn.Write(p); err != nil {
+		return nil, err
+	}
+	if u.HandshakeTimeout > 0 {
+		if err := netConn.SetWriteDeadline(time.Time{}); err != nil {
+			return nil, err
+		}
+	}
+
+	// Set netConn to nil to avoid call to netConn.Close() in
+	// deferred function call.
+	netConn = nil
 
 	return c, nil
 }
@@ -356,8 +372,8 @@ func bufioWriterBuffer(originalWriter io.Writer, bw *bufio.Writer) []byte {
 	// bufio.Writer's underlying writer.
 	var wh writeHook
 	bw.Reset(&wh)
-	bw.WriteByte(0)
-	bw.Flush()
+	_ = bw.WriteByte(0)
+	_ = bw.Flush()
 
 	bw.Reset(originalWriter)
 
