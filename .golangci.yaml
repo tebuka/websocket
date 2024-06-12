@@ -1,0 +1,9 @@
+run:
+  timeout: "5m"
+  tests: false
+linters:
+  enable:
+    - gosec
+linters-settings:
+  errcheck:
+    disable-default-exclusions: true

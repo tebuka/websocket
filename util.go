@@ -18,8 +18,8 @@ var keyGUID = []byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
 
 func computeAcceptKey(challengeKey string) string {
 	h := sha1.New() //#nosec G401 See Sec-WebSocket-Accept in RFC 6455.
-	h.Write([]byte(challengeKey))
-	h.Write(keyGUID)
+	_, _ = h.Write([]byte(challengeKey))
+	_, _ = h.Write(keyGUID)
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
