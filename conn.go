@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -1256,5 +1257,8 @@ var messageTypes = map[int]string{
 }
 
 func FormatMessageType(mt int) string {
-	return messageTypes[mt]
+	if s, ok := messageTypes[mt]; ok {
+		return s
+	}
+	return fmt.Sprintf("InvalidMessage(%d)", mt)
 }

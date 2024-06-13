@@ -745,19 +745,20 @@ func TestFailedConnectionReadPanic(t *testing.T) {
 	t.Fatal("should not get here")
 }
 
+var formatMessageTypeTests = []struct {
+	mt   int
+	want string
+}{
+	{TextMessage, "TextMessage"},
+	{CloseMessage, "CloseMessage"},
+	{123, "InvalidMessage(123)"},
+}
+
 func TestFormatMessageType(t *testing.T) {
-	str := FormatMessageType(TextMessage)
-	if str != messageTypes[TextMessage] {
-		t.Error("failed to format message type")
-	}
-
-	str = FormatMessageType(CloseMessage)
-	if str != messageTypes[CloseMessage] {
-		t.Error("failed to format message type")
-	}
-
-	str = FormatMessageType(123)
-	if str != messageTypes[123] {
-		t.Error("failed to format message type")
+	for _, tt := range formatMessageTypeTests {
+		got := FormatMessageType(tt.mt)
+		if got != tt.want {
+			t.Errorf("FormatMesssageType(%d) = %s, want %s", tt.mt, got, tt.want)
+		}
 	}
 }
