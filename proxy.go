@@ -6,6 +6,7 @@ package websocket
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -84,6 +85,16 @@ func (hpd *httpProxyDialer) DialContext(ctx context.Context, network string, add
 		_ = conn.Close()
 		return nil, err
 	}
+
+	// Close the response body to silence false positives from linters. Reset
+	// the buffered reader first to ensure that Close() does not read from
+	// conn.
+	// Note: Applications must call resp.Body.Close() on a response returned
+	// http.ReadResponse to inspect trailers or read another response from the
+	// buffered reader. The call to resp.Body.Close() does not release
+	// resources.
+	br.Reset(bytes.NewReader(nil))
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		_ = conn.Close()
