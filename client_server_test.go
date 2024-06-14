@@ -5,6 +5,7 @@
 package websocket
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -1179,5 +1180,48 @@ func TestNextProtos(t *testing.T) {
 	_, _, err = d.Dial(makeWsProto(ts.URL), nil)
 	if err == nil {
 		t.Fatalf("Dial succeeded, expect fail ")
+	}
+}
+
+type extraDataResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w extraDataResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	c, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if rw != nil {
+		// Example single-frame masked text message from section 5.7 of the RFC.
+		message := []byte{0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58}
+		rw.Reader.Reset(bytes.NewReader(message))
+		rw.Reader.Peek(len(message))
+	}
+	return c, rw, err
+}
+
+func TestDataReceivedBeforeHandshake(t *testing.T) {
+	s := newServer(t)
+	defer s.Close()
+
+	origHandler := s.server.Config.Handler
+	s.server.Config.Handler = http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			origHandler.ServeHTTP(extraDataResponseWriter{w}, r)
+		})
+
+	ws, _, err := cstDialer.Dial(s.url, nil)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer ws.Close()
+	_, _, err = ws.ReadMessage()
+	ce, ok := err.(*CloseError)
+	if !ok {
+		t.Fatalf("got error %T, expected %T", err, ce)
+	}
+	if ce.Code != CloseProtocolError {
+		t.Fatalf("got close code %d, want protocol error", ce.Code)
+	}
+	if !strings.Contains(ce.Text, "handshake") {
+		t.Fatalf("got close text %s, want text containing 'handshake'", ce.Text)
 	}
 }

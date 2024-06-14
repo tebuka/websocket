@@ -188,9 +188,10 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 		}
 	}()
 
-	if brw.Reader.Buffered() > 0 {
-		return nil, errors.New("websocket: client sent data before handshake is complete")
-	}
+	// The peer must not send data before the handshake is complete. Note that
+	// we received the data and report a protocol error after sending the
+	// handshake response.
+	receivedDataBeforeHandshake := brw.Reader.Buffered() > 0
 
 	var br *bufio.Reader
 	if u.ReadBufferSize == 0 && bufioReaderSize(netConn, brw.Reader) > 256 {
@@ -264,6 +265,13 @@ func (u *Upgrader) Upgrade(w http.ResponseWriter, r *http.Request, responseHeade
 	if _, err = netConn.Write(p); err != nil {
 		return nil, err
 	}
+
+	if receivedDataBeforeHandshake {
+		_ = c.WriteMessage(CloseMessage,
+			FormatCloseMessage(CloseProtocolError, "client sent data before handshake is complete"))
+		return nil, errors.New("websocket: client sent data before handshake is complete")
+	}
+
 	if u.HandshakeTimeout > 0 {
 		if err := netConn.SetWriteDeadline(time.Time{}); err != nil {
 			return nil, err
